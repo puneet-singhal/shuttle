@@ -6,26 +6,32 @@
 <meta name="theme-color" content="#0F172A"/>
 <meta name="apple-mobile-web-app-capable" content="yes"/>
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<meta name="apple-mobile-web-app-title" content="Shuttle"/>
+<meta name="description" content="Track badminton matches with your crew"/>
 <title>Shuttle — Badminton Tracker</title>
-<link rel="manifest" href="#"/>
+<link rel="manifest" href="manifest.json"/>
+<link rel="apple-touch-icon" href="icon-192.png"/>
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet"/>
 
 <!-- ═══════════════════════════════════════════
-     FIREBASE SDKs  ←  PLUG YOUR CONFIG below
+     FIREBASE SDKs  ←  PLUG YOUR CONFIG BELOW
      ═══════════════════════════════════════════ -->
 <script type="module">
+  // ── Firebase ready promise — lets the main script wait for FB to load ─────
+  window._fbReadyResolve = null;
+  window._fbReady = new Promise(resolve => { window._fbReadyResolve = resolve; });
+
   // ─── STEP 1: Replace this object with YOUR Firebase project config ───────
   //   Go to: Firebase Console → Project Settings → Your Apps → SDK Setup
-  const firebaseConfig =  {
-  apiKey: "AIzaSyDcdaMrF8ejZR2tqjyt5vdgVbLP2-gO1bU",
-  authDomain: "shuttle-3e2f4.firebaseapp.com",
-  projectId: "shuttle-3e2f4",
-  storageBucket: "shuttle-3e2f4.firebasestorage.app",
-  messagingSenderId: "904594064639",
-  appId: "1:904594064639:web:abd1262f4ac232c2c038ca",
-  measurementId: "G-5BQK40SPBQ"
-};
+  const firebaseConfig = {
+    apiKey: "AIzaSyDcdaMrF8ejZR2tqjyt5vdgVbLP2-gO1bU",
+    authDomain: "shuttle-3e2f4.firebaseapp.com",
+    projectId: "shuttle-3e2f4",
+    storageBucket: "shuttle-3e2f4.appspot.com",
+    messagingSenderId: "904594064639",
+    appId: "1:904594064639:web:abd1262f4ac232c2c038ca",
+    measurementId: "G-5BQK40SPBQ"
   };
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -45,6 +51,8 @@
   window._fb = { db, auth, collection, doc, setDoc, getDoc, getDocs,
                  addDoc, query, where, orderBy, onSnapshot, serverTimestamp,
                  RecaptchaVerifier, signInWithPhoneNumber, onAuthStateChanged, signOut };
+  // Signal that Firebase is ready
+  window._fbReadyResolve && window._fbReadyResolve(window._fb);
 
   // ── Auth state listener ───────────────────────────────────────────────────
   onAuthStateChanged(auth, async user => {
@@ -601,6 +609,7 @@ a { color: inherit; text-decoration: none; }
 //  SHUTTLE APP — Main Application Logic
 // ═══════════════════════════════════════════════════════════
 
+(async () => { await window._fbReady;
 window.APP = (() => {
   // ── State ──────────────────────────────────────────────
   let currentUser   = null;
@@ -677,31 +686,52 @@ window.APP = (() => {
   }
 
   function initRecaptcha() {
+    if (!window._fb) { console.warn('FB not ready yet'); return; }
     const { auth, RecaptchaVerifier } = window._fb;
     if (recaptchaVerifier) return;
     try {
       recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
-        size: 'normal',
+        size: 'invisible',
         callback: () => {},
       });
       recaptchaVerifier.render();
     } catch(e) { console.warn('reCAPTCHA init:', e); }
   }
 
+  function resetRecaptcha() {
+    try { recaptchaVerifier?.clear(); } catch(e) {}
+    recaptchaVerifier = null;
+    initRecaptcha();
+  }
+
   document.getElementById('btn-send-otp').addEventListener('click', async () => {
     const phone = document.getElementById('auth-phone').value.replace(/\D/g,'');
     if (phone.length !== 10) { toast('Enter a valid 10-digit number'); return; }
     const fullPhone = '+91' + phone;
+    const btn = document.getElementById('btn-send-otp');
+    btn.textContent = 'Sending…';
+    btn.disabled = true;
     try {
-      document.getElementById('btn-send-otp').textContent = 'Sending…';
       const { signInWithPhoneNumber } = window._fb;
       confirmationResult = await signInWithPhoneNumber(window._fb.auth, fullPhone, recaptchaVerifier);
       document.getElementById('auth-phone-display').textContent = fmtPhone(fullPhone);
       setAuthStep(2);
     } catch(e) {
-      console.error(e);
-      toast('Failed to send OTP. Check number & try again.');
-      document.getElementById('btn-send-otp').textContent = 'Send OTP';
+      console.error('OTP error:', e.code, e.message);
+      resetRecaptcha();
+      if (e.code === 'auth/invalid-phone-number')
+        toast('Invalid phone number format');
+      else if (e.code === 'auth/too-many-requests')
+        toast('Too many attempts. Try again in a few minutes.');
+      else if (e.code === 'auth/operation-not-allowed')
+        toast('Phone auth not enabled — check Firebase Console');
+      else if (e.code === 'auth/unauthorized-domain')
+        toast('Domain not authorised — add it in Firebase Console');
+      else
+        toast('Error: ' + (e.code || 'unknown') + '. See browser console.');
+    } finally {
+      btn.textContent = 'Send OTP';
+      btn.disabled = false;
     }
   });
 
@@ -1480,6 +1510,17 @@ window.APP = (() => {
     exportMatches, exportPlayers
   };
 })();
+})(); // end async wrapper
+</script>
+<script>
+// ── Service Worker Registration ──────────────────────
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js')
+      .then(reg => console.log('SW registered:', reg.scope))
+      .catch(err => console.warn('SW registration failed:', err));
+  });
+}
 </script>
 </body>
 </html>
