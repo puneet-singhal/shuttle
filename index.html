@@ -563,16 +563,57 @@ function displayName(player, list) {
   return (player.name||'').split(' ')[0] + (last ? ' ' + last[0] + '.' : '');
 }
 
-function saveSession(data) {
-  session = data;
-  localStorage.setItem(LS_KEY, JSON.stringify(data));
+// Generate or retrieve a stable device ID
+function getDeviceId() {
+  let did = localStorage.getItem('shuttle_device_id');
+  if (!did) {
+    did = 'dev_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+    localStorage.setItem('shuttle_device_id', did);
+  }
+  return did;
 }
+
+async function saveSession(data) {
+  session = data;
+  // Save to localStorage (works on Android + browser)
+  localStorage.setItem(LS_KEY, JSON.stringify(data));
+  // Also save to Firestore keyed by device ID (fixes iOS PWA sandbox issue)
+  try {
+    const deviceId = getDeviceId();
+    await setDoc(doc(db, 'devices', deviceId), {
+      session: data,
+      updatedAt: serverTimestamp()
+    });
+  } catch(e) { console.warn('Device session save failed:', e); }
+}
+
 function clearSession() {
   session = null;
   localStorage.removeItem(LS_KEY);
+  // Clear from Firestore too
+  try {
+    const deviceId = getDeviceId();
+    deleteDoc(doc(db, 'devices', deviceId));
+  } catch(e) {}
 }
+
 function loadSession() {
   try { return JSON.parse(localStorage.getItem(LS_KEY)); } catch { return null; }
+}
+
+// Try Firestore if localStorage is empty (iOS PWA sandbox)
+async function loadSessionFromCloud() {
+  try {
+    const deviceId = getDeviceId();
+    const snap = await getDoc(doc(db, 'devices', deviceId));
+    if (snap.exists()) {
+      const data = snap.data().session;
+      // Restore to localStorage for future fast loads
+      localStorage.setItem(LS_KEY, JSON.stringify(data));
+      return data;
+    }
+  } catch(e) { console.warn('Cloud session load failed:', e); }
+  return null;
 }
 
 function genCode() {
@@ -638,7 +679,7 @@ async function createSquad() {
       active: true, joinedAt: serverTimestamp()
     });
 
-    saveSession({ squadId: code, squadCode: code, playerId, playerPhone: phone, playerName: name, isAdmin: true });
+    await saveSession({ squadId: code, squadCode: code, playerId, playerPhone: phone, playerName: name, isAdmin: true });
     await bootApp();
     toast('Squad created! 🏸');
   } catch(e) {
@@ -675,7 +716,7 @@ async function joinSquad() {
     }
 
     const isAdmin = squadSnap.data().adminPhone === phone;
-    saveSession({ squadId: code, squadCode: code, playerId, playerPhone: phone, playerName: name, isAdmin });
+    await saveSession({ squadId: code, squadCode: code, playerId, playerPhone: phone, playerName: name, isAdmin });
     await bootApp();
     toast(`Joined ${squadSnap.data().name}! 🏸`);
   } catch(e) {
@@ -1337,18 +1378,41 @@ document.querySelectorAll('.modal-overlay').forEach(o=>{
 });
 
 // ══ INIT ═════════════════════════════════════════════════
-session=loadSession();
+// Show a brief loading state while we check session
+document.querySelector('#screen-onboard .on-emoji').textContent = '⏳';
+document.querySelector('#screen-onboard .on-title').textContent = 'Loading…';
+document.querySelector('#screen-onboard .on-actions').style.display = 'none';
 
-// Handle ?join= invite link
-const urlJoin=new URLSearchParams(window.location.search).get('join');
-if(urlJoin&&!session){
-  $('join-code').value=urlJoin.toUpperCase();
+// Handle ?join= invite link first
+const urlJoin = new URLSearchParams(window.location.search).get('join');
+if (urlJoin) {
+  $('join-code').value = urlJoin.toUpperCase();
+  document.querySelector('#screen-onboard .on-emoji').textContent = '🏸';
+  document.querySelector('#screen-onboard .on-title').innerHTML = 'Shut<span style="color:var(--green)">tle</span>';
+  document.querySelector('#screen-onboard .on-actions').style.display = 'flex';
   showJoin();
-} else if(session) {
-  try { await bootApp(); }
-  catch(e){ console.error(e); clearSession(); showOnboard(); }
 } else {
-  showOnboard();
+  // Try localStorage first (fast), then Firestore (iOS PWA fallback)
+  session = loadSession();
+  if (!session) {
+    session = await loadSessionFromCloud();
+  }
+  if (session) {
+    try {
+      await bootApp();
+    } catch(e) {
+      console.error(e); clearSession(); showOnboard();
+      document.querySelector('#screen-onboard .on-emoji').textContent = '🏸';
+      document.querySelector('#screen-onboard .on-title').innerHTML = 'Shut<span style="color:var(--green)">tle</span>';
+      document.querySelector('#screen-onboard .on-actions').style.display = 'flex';
+    }
+  } else {
+    // No session found anywhere — show onboarding
+    document.querySelector('#screen-onboard .on-emoji').textContent = '🏸';
+    document.querySelector('#screen-onboard .on-title').innerHTML = 'Shut<span style="color:var(--green)">tle</span>';
+    document.querySelector('#screen-onboard .on-actions').style.display = 'flex';
+    showOnboard();
+  }
 }
 
 // Service worker
