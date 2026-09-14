@@ -460,7 +460,10 @@ a{color:inherit;text-decoration:none;}
     <div class="modal-handle"></div>
     <div class="modal-title">Add Player</div>
     <p class="text-slate" style="margin-bottom:16px;line-height:1.6;">Add a teammate. When they join using the squad code + their phone, their history links automatically.</p>
-    <div class="field"><label>Name</label><input type="text" id="new-player-name" placeholder="e.g. Rahul Sharma"/></div>
+    <div class="field"><label>Name</label>
+      <input type="text" id="new-player-name" placeholder="e.g. Rahul Sharma" oninput="APP.searchGlobalPlayers(this.value)" autocomplete="off"/>
+      <div id="global-player-suggestions" style="margin-top:6px;"></div>
+    </div>
     <div class="field"><label>Phone</label><input type="tel" id="new-player-phone" placeholder="9876543210" maxlength="10" inputmode="numeric"/></div>
     <button class="btn btn-primary" onclick="APP.saveNewPlayer()">Add Player</button>
     <button class="btn btn-ghost mt-8" onclick="APP.closeModal('modal-add-player')">Cancel</button>
@@ -496,6 +499,22 @@ a{color:inherit;text-decoration:none;}
     <div class="sec-label" style="margin-bottom:10px;">Members</div>
     <div id="squad-members-list"></div>
     <button class="btn btn-ghost mt-12" onclick="APP.closeModal('modal-squad-settings')">Close</button>
+  </div>
+</div>
+
+<!-- Switch Squad Modal -->
+<div class="modal-overlay" id="modal-switch-squad">
+  <div class="modal-sheet">
+    <div class="modal-handle"></div>
+    <div class="modal-title">Switch Squad</div>
+    <div id="my-squads-list" style="margin-bottom:16px;"></div>
+    <div class="divider"></div>
+    <div class="field"><label>Join Another Squad</label>
+      <input type="text" id="switch-code" placeholder="Enter 6-char code" maxlength="6" style="text-transform:uppercase;letter-spacing:.2em;font-size:18px;text-align:center;font-family:'DM Mono',monospace;" oninput="this.value=this.value.toUpperCase()"/>
+    </div>
+    <div class="field"><label>Your Name (in that squad)</label><input type="text" id="switch-name" placeholder="Your name"/></div>
+    <button class="btn btn-primary" onclick="APP.switchToSquad()">Join & Switch</button>
+    <button class="btn btn-ghost mt-8" onclick="APP.closeModal('modal-switch-squad')">Cancel</button>
   </div>
 </div>
 
@@ -844,7 +863,9 @@ function initLog() {
   renderTeam('A'); renderTeam('B'); renderGames(); updateWinner();
   const now = new Date();
   now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
-  $('log-datetime').value = now.toISOString().slice(0,16);
+  const nowStr = now.toISOString().slice(0,16);
+  $('log-datetime').value = nowStr;
+  $('log-datetime').max = nowStr;
   $('log-duration').value = '';
 }
 
@@ -996,6 +1017,42 @@ function openAddPlayer(fromPicker=false) {
   openModal('modal-add-player');
 }
 
+// Search across all squads for existing players by name
+async function searchGlobalPlayers(nameQuery) {
+  if (nameQuery.length < 2) { $('global-player-suggestions').innerHTML=''; return; }
+  try {
+    // Search all squads' members collections - we collect from known squads
+    const mySquads = JSON.parse(localStorage.getItem('shuttle_my_squads') || '[]');
+    const seen = new Set(members.map(m=>m.id));
+    const results = [];
+    for (const sq of mySquads) {
+      if (sq.squadCode === session.squadCode) continue;
+      const snap = await getDocs(collection(db,'squads',sq.squadCode,'members'));
+      snap.docs.forEach(d => {
+        const p = d.data();
+        if (!seen.has(p.id) && p.name?.toLowerCase().includes(nameQuery.toLowerCase())) {
+          seen.add(p.id);
+          results.push(p);
+        }
+      });
+    }
+    const el = $('global-player-suggestions');
+    if (!results.length) { el.innerHTML=''; return; }
+    el.innerHTML = results.map(p=>`
+      <div onclick="APP.fillPlayerFromGlobal('${p.name}','${p.phone}')"
+           style="padding:10px 12px;border:1px solid var(--border);border-radius:var(--r-sm);margin-bottom:6px;cursor:pointer;background:var(--navy);">
+        <div style="font-size:14px;font-weight:500;">${p.name}</div>
+        <div style="font-size:11px;color:var(--slate);font-family:'DM Mono',monospace;">${fmtPhone(p.phone)}</div>
+      </div>`).join('');
+  } catch(e) { console.warn('Global search failed:', e); }
+}
+
+function fillPlayerFromGlobal(name, phone) {
+  $('new-player-name').value = name;
+  $('new-player-phone').value = phone;
+  $('global-player-suggestions').innerHTML = '';
+}
+
 async function saveNewPlayer() {
   const name=$('new-player-name').value.trim();
   const phone=$('new-player-phone').value.replace(/\D/g,'');
@@ -1025,26 +1082,54 @@ async function loadMatches() {
     $('matches-list').innerHTML='<div class="empty"><div class="empty-icon">🏸</div><div class="empty-title">No matches yet</div><div class="empty-sub">Log your first match!</div></div>';
     return;
   }
-  $('matches-list').innerHTML=allMatches.map(m=>{
-    const anA=playerNames(m.teamA);
-    const anB=playerNames(m.teamB);
-    const myId=session.playerId;
-    const inA=(m.teamA||[]).includes(myId);
-    const inB=(m.teamB||[]).includes(myId);
-    const iPlay=inA||inB;
-    const won=iPlay?(inA?m.winner==='A':m.winner==='B'):null;
-    const bClass=iPlay?(won?'mbadge-w':'mbadge-l'):'mbadge-n';
-    const bTxt=iPlay?(won?'W':'L'):'·';
-    const scoreStr=(m.games||[]).map(g=>`${g.a}-${g.b}`).join(', ');
-    return `<div class="match-row" onclick="APP.openMatch('${m.id}')">
-      <div class="match-badge ${bClass}">${bTxt}</div>
-      <div class="match-info">
-        <div class="match-vs">${anA} <span style="color:var(--slate)">vs</span> ${anB}</div>
-        <div class="match-meta">${fmtDateTime(m.playedAt)}${m.duration?' · '+m.duration+'min':''} · ${m.matchType}</div>
-      </div>
-      <div class="match-score mono">${scoreStr}</div>
-    </div>`;
-  }).join('');
+  // Group matches by day
+  const dayGroups = {};
+  const dayOrder = [];
+  allMatches.forEach(m => {
+    const d = m.playedAt?.toDate ? m.playedAt.toDate() : new Date(m.playedAt||0);
+    const today = new Date(); today.setHours(0,0,0,0);
+    const yesterday = new Date(today); yesterday.setDate(yesterday.getDate()-1);
+    const mDay = new Date(d); mDay.setHours(0,0,0,0);
+    let label;
+    if (mDay.getTime()===today.getTime()) label='Today';
+    else if (mDay.getTime()===yesterday.getTime()) label='Yesterday';
+    else label = d.toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short',year:'numeric'});
+    if (!dayGroups[label]) { dayGroups[label]=[]; dayOrder.push(label); }
+    dayGroups[label].push(m);
+  });
+
+  let html = '';
+  dayOrder.forEach(label => {
+    html += `<div style="padding:8px 20px;background:var(--navy-800);font-size:11px;font-weight:600;color:var(--slate);text-transform:uppercase;letter-spacing:.06em;border-bottom:1px solid var(--border);">${label}</div>`;
+    dayGroups[label].forEach(m => {
+      const myId=session.playerId;
+      const inA=(m.teamA||[]).includes(myId);
+      const inB=(m.teamB||[]).includes(myId);
+      const iPlay=inA||inB;
+      const won=iPlay?(inA?m.winner==='A':m.winner==='B'):null;
+      const bClass=iPlay?(won?'mbadge-w':'mbadge-l'):'mbadge-n';
+      const bTxt=iPlay?(won?'W':'L'):'·';
+      const scoreStr=(m.games||[]).map(g=>`${g.a}-${g.b}`).join(', ');
+      // Color team names: winner=green, loser=red
+      const teamAColor = m.winner==='A' ? 'var(--green)' : 'var(--red)';
+      const teamBColor = m.winner==='B' ? 'var(--green)' : 'var(--red)';
+      const anA = playerNames(m.teamA);
+      const anB = playerNames(m.teamB);
+      html += `<div class="match-row" onclick="APP.openMatch('${m.id}')">
+        <div class="match-badge ${bClass}">${bTxt}</div>
+        <div class="match-info">
+          <div class="match-vs">
+            <span style="color:${teamAColor};font-weight:600;">${anA}</span>
+            <span style="color:var(--slate);font-weight:400;"> vs </span>
+            <span style="color:${teamBColor};font-weight:600;">${anB}</span>
+          </div>
+          <div class="match-meta">${fmtDateTime(m.playedAt)}${m.duration?' · '+m.duration+'min':''} · ${m.matchType}</div>
+        </div>
+        <div class="match-score mono">${scoreStr}</div>
+      </div>`;
+    });
+  });
+  $('matches-list').innerHTML = html;
 }
 
 function playerNames(ids) {
@@ -1059,12 +1144,16 @@ function openMatch(id) {
     <span style="color:var(--slate);font-size:13px;">Game ${i+1}</span>
     <span class="mono" style="font-size:17px;">${g.a} – ${g.b}</span>
   </div>`).join('');
+  const deleteBtn = session.isAdmin
+    ? `<button class="btn btn-danger mt-12" onclick="APP.deleteMatch('${m.id}')">🗑 Delete Match</button>`
+    : '';
   $('modal-match-content').innerHTML=`
     <div class="modal-title">${anA} <span style="color:var(--slate);font-weight:400;">vs</span> ${anB}</div>
     <div class="pill pill-green" style="margin-bottom:16px;">🏆 ${winnerName} won</div>
     <div style="margin-bottom:16px;">${gameRows}</div>
     <div class="text-slate">${fmtDateTime(m.playedAt)}${m.duration?' · '+m.duration+' min':''}</div>
-    <div class="text-slate" style="margin-top:4px;">${m.matchType==='doubles'?'Doubles':'Singles'} · ${m.winsA}–${m.winsB} in games</div>`;
+    <div class="text-slate" style="margin-top:4px;">${m.matchType==='doubles'?'Doubles':'Singles'} · ${m.winsA}–${m.winsB} in games</div>
+    ${deleteBtn}`;
   openModal('modal-match');
 }
 
@@ -1073,19 +1162,31 @@ async function loadPlayers() {
   const stats=computeStats();
   const el=$('players-list');
   if(!members.length){el.innerHTML='<div class="empty"><div class="empty-icon">👥</div><div class="empty-title">No players yet</div></div>';return;}
+  const totalMatches = allMatches.length;
   el.innerHTML=members.map(m=>{
     const s=stats[m.id]||{played:0,won:0};
     const pct=s.played?Math.round(s.won/s.played*100):0;
+    const participation=totalMatches?Math.round(s.played/totalMatches*100):0;
     const isMe=m.id===session.playerId;
-    return `<div class="player-row" onclick="APP.openPlayerStats('${m.id}')">
+    const canRemove=session.isAdmin&&!isMe;
+    return `<div class="player-row" onclick="APP.openPlayerStats('${m.id}')" oncontextmenu="event.preventDefault();${canRemove?`APP.removePlayer('${m.id}','${m.name}')`:''}" style="cursor:pointer;">
       <div class="avatar av-md">${initials(m.name)}</div>
       <div class="player-row-info">
         <div class="player-row-name">${displayName(m)}${isMe?' <span style="color:var(--green);font-size:11px;">● You</span>':''}${m.isAdmin||squad?.adminPhone===m.phone?' <span class="pill pill-purple" style="font-size:9px;">Admin</span>':''}</div>
-        <div class="player-row-phone">${fmtPhone(m.phone)}</div>
+        <div class="player-row-phone" style="margin-top:3px;">
+          <span style="color:var(--green);font-weight:600;">${pct}%</span>
+          <span style="color:var(--slate);"> · ${s.played}P · ${participation}% squad</span>
+        </div>
       </div>
-      <div class="player-row-stat">${pct}% · ${s.played}P</div>
-    </div>
-    ${session.isAdmin&&!isMe?`<div style="padding:0 20px 10px;"><button class="btn btn-danger btn-sm" onclick="event.stopPropagation();APP.removePlayer('${m.id}','${m.name}')">Remove</button></div>`:''}`;
+      ${canRemove
+        ? `<button onclick="event.stopPropagation();APP.removePlayer('${m.id}','${m.name}')"
+             style="color:var(--red);font-size:20px;padding:8px;flex-shrink:0;line-height:1;" title="Remove player">🗑</button>`
+        : `<div class="player-row-stat" style="text-align:right;">
+             <div style="font-size:16px;font-weight:600;color:var(--green);">${pct}%</div>
+             <div style="font-size:11px;color:var(--slate);">${s.played}P · ${participation}%</div>
+           </div>`
+      }
+    </div>`;
   }).join('');
 }
 
@@ -1175,6 +1276,74 @@ async function updateName() {
     session.playerName=name; saveSession(session);
     loadProfile(); toast('Name updated');
   } catch(e){ toast('Failed to update'); }
+}
+
+// ── SWITCH SQUAD ══════════════════════════════════════════
+function openSwitchSquad() {
+  // Load all squads this player has been in (stored in localStorage)
+  const mySquads = JSON.parse(localStorage.getItem('shuttle_my_squads') || '[]');
+  const el = $('my-squads-list');
+  if (mySquads.length <= 1) {
+    el.innerHTML = '<p class="text-slate">No other squads yet. Join one below.</p>';
+  } else {
+    el.innerHTML = '<div class="sec-label" style="margin-bottom:10px;">Your squads</div>' +
+      mySquads.map(sq => `
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border);">
+          <div>
+            <div style="font-size:14px;font-weight:600;">${sq.squadName||sq.squadCode}</div>
+            <div class="mono text-slate" style="font-size:11px;">${sq.squadCode}</div>
+          </div>
+          ${sq.squadCode===session.squadCode
+            ? '<span class="pill pill-green">Current</span>'
+            : `<button class="btn btn-ghost btn-sm" onclick="APP.switchSession('${sq.squadCode}')">Switch</button>`}
+        </div>`).join('');
+  }
+  $('switch-code').value = '';
+  $('switch-name').value = session.playerName || '';
+  openModal('modal-switch-squad');
+}
+
+async function switchSession(code) {
+  // Find saved session for this squad
+  const mySquads = JSON.parse(localStorage.getItem('shuttle_my_squads') || '[]');
+  const sq = mySquads.find(s => s.squadCode === code);
+  if (!sq) { toast('Session not found'); return; }
+  await saveSession(sq);
+  closeModal('modal-switch-squad');
+  await bootApp();
+  toast(`Switched to ${sq.squadName || code}`);
+}
+
+async function switchToSquad() {
+  const code = $('switch-code').value.trim().toUpperCase();
+  const name = $('switch-name').value.trim();
+  const phone = session.playerPhone;
+  if (code.length !== 6) { toast('Enter a valid 6-char code'); return; }
+  if (!name) { toast('Enter your name'); return; }
+  try {
+    const squadSnap = await getDoc(doc(db, 'squads', code));
+    if (!squadSnap.exists()) { toast('Squad not found'); return; }
+    const playerId = 'p_' + phone;
+    const memberRef = doc(db, 'squads', code, 'members', playerId);
+    const memberSnap = await getDoc(memberRef);
+    if (memberSnap.exists()) {
+      await updateDoc(memberRef, { name, active: true });
+    } else {
+      await setDoc(memberRef, { id: playerId, name, phone, isAdmin: false, active: true, joinedAt: serverTimestamp() });
+    }
+    const isAdmin = squadSnap.data().adminPhone === phone;
+    const newSession = { squadId: code, squadCode: code, playerId, playerPhone: phone, playerName: name, isAdmin,
+                         squadName: squadSnap.data().name };
+    // Save to multi-squad list
+    const mySquads = JSON.parse(localStorage.getItem('shuttle_my_squads') || '[]');
+    const existing = mySquads.findIndex(s => s.squadCode === code);
+    if (existing >= 0) mySquads[existing] = newSession; else mySquads.push(newSession);
+    localStorage.setItem('shuttle_my_squads', JSON.stringify(mySquads));
+    await saveSession(newSession);
+    closeModal('modal-switch-squad');
+    await bootApp();
+    toast(`Switched to ${squadSnap.data().name}! 🏸`);
+  } catch(e) { console.error(e); toast('Failed to switch'); }
 }
 
 function leaveSquad() {
@@ -1437,7 +1606,10 @@ window.APP = {
   removePlayer, updateName, leaveSquad,
   copyInviteLink, generateFlyer, shareFlyer, closeFlyer,
   exportMatches, exportPlayers,
-  closeModal
+  closeModal,
+  deleteMatch,
+  openSwitchSquad, switchSession, switchToSquad,
+  searchGlobalPlayers, fillPlayerFromGlobal
 };
 
 })();
