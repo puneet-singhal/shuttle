@@ -1376,6 +1376,19 @@ async function saveSquadName() {
   } catch(e){ toast('Failed to update'); }
 }
 
+// ══ DELETE MATCH ══════════════════════════════════════════
+async function deleteMatch(id) {
+  if (!confirm('Delete this match? This cannot be undone.')) return;
+  try {
+    await deleteDoc(doc(db, 'squads', session.squadId, 'matches', id));
+    allMatches = allMatches.filter(m => m.id !== id);
+    closeModal('modal-match');
+    toast('Match deleted');
+    loadMatches();
+    loadHome();
+  } catch(e) { console.error(e); toast('Failed to delete'); }
+}
+
 // ══ EXPORT CSV ════════════════════════════════════════════
 function downloadCSV(filename, rows) {
   const esc=v=>{const s=String(v??'');return s.includes(',')||s.includes('"')||s.includes('\n')?'"'+s.replace(/"/g,'""')+'"':s;};
