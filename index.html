@@ -1169,7 +1169,11 @@ async function loadPlayers() {
     const participation=totalMatches?Math.round(s.played/totalMatches*100):0;
     const isMe=m.id===session.playerId;
     const canRemove=session.isAdmin&&!isMe;
-    return `<div class="player-row" onclick="APP.openPlayerStats('${m.id}')" oncontextmenu="event.preventDefault();${canRemove?`APP.removePlayer('${m.id}','${m.name}')`:''}" style="cursor:pointer;">
+    const ctxMenu = canRemove ? "event.preventDefault();APP.removePlayer('" + m.id + "','" + m.name.replace(/'/g,"\\'") + "')" : "event.preventDefault();";
+    const rightCol = canRemove
+      ? '<button onclick="event.stopPropagation();APP.removePlayer(\'' + m.id + '\',\'' + m.name.replace(/'/g,"\\'") + '\')" style="color:var(--red);font-size:20px;padding:8px;flex-shrink:0;line-height:1;" title="Remove player">🗑</button>'
+      : '<div class="player-row-stat" style="text-align:right;"><div style="font-size:16px;font-weight:600;color:var(--green);">' + pct + '%</div><div style="font-size:11px;color:var(--slate);">' + s.played + 'P · ' + participation + '%</div></div>';
+    return `<div class="player-row" onclick="APP.openPlayerStats('${m.id}')" oncontextmenu="${ctxMenu}" style="cursor:pointer;">
       <div class="avatar av-md">${initials(m.name)}</div>
       <div class="player-row-info">
         <div class="player-row-name">${displayName(m)}${isMe?' <span style="color:var(--green);font-size:11px;">● You</span>':''}${m.isAdmin||squad?.adminPhone===m.phone?' <span class="pill pill-purple" style="font-size:9px;">Admin</span>':''}</div>
@@ -1178,14 +1182,7 @@ async function loadPlayers() {
           <span style="color:var(--slate);"> · ${s.played}P · ${participation}% squad</span>
         </div>
       </div>
-      ${canRemove
-        ? `<button onclick="event.stopPropagation();APP.removePlayer('${m.id}','${m.name}')"
-             style="color:var(--red);font-size:20px;padding:8px;flex-shrink:0;line-height:1;" title="Remove player">🗑</button>`
-        : `<div class="player-row-stat" style="text-align:right;">
-             <div style="font-size:16px;font-weight:600;color:var(--green);">${pct}%</div>
-             <div style="font-size:11px;color:var(--slate);">${s.played}P · ${participation}%</div>
-           </div>`
-      }
+      ${rightCol}
     </div>`;
   }).join('');
 }
