@@ -1448,7 +1448,12 @@ async function generateFlyer() {
       if(won) todayStats[pid].won++;
     });
   });
-  const top=Object.values(todayStats).filter(s=>s.played>0).sort((a,b)=>b.won-a.won||b.played-a.played)[0];
+    const playersToday = Object.values(todayStats).filter(s => s.played > 0);
+    playersToday.forEach(s => { s.winPct = s.played ? s.won / s.played : 0; });
+    playersToday.sort((a, b) => b.winPct - a.winPct || b.won - a.won || b.played - a.played);
+    const topPct = playersToday[0]?.winPct;
+    const topPlayers = playersToday.filter(s => s.winPct === topPct && s.won === playersToday[0].won);
+    const top = topPlayers.length > 0 ? { ...topPlayers[0], name: topPlayers.map(s => s.name).join(' & ') } : null;
 
   const canvas=$('flyer-canvas');
   const W=400, H=600;
